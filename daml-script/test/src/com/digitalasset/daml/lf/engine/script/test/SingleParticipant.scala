@@ -5,26 +5,17 @@ package com.daml.lf.engine.script.test
 
 import java.io.File
 import java.time.Duration
-import scalaz.{-\/, \/-}
-import scalaz.syntax.traverse._
-import spray.json._
 
-import com.daml.lf.archive.Dar
-import com.daml.lf.archive.DarReader
-import com.daml.lf.archive.Decode
-import com.daml.lf.data.{FrontStack, FrontStackCons, Numeric}
+import com.daml.daml_lf_dev.DamlLf
+import com.daml.lf.archive.{Dar, DarReader, Decode}
+import com.daml.lf.data.Ref.{Party => LedgerParty, _}
 import com.daml.lf.data.Time.Timestamp
-import com.daml.lf.data.Ref._
-import com.daml.lf.data.Ref.{Party => LedgerParty}
+import com.daml.lf.data.{FrontStack, FrontStackCons, Numeric}
+import com.daml.lf.engine.script._
 import com.daml.lf.language.Ast._
 import com.daml.lf.speedy.SValue._
-import com.daml.daml_lf_dev.DamlLf
-import com.daml.ledger.api.auth.{AuthServiceJWTCodec, AuthServiceJWTPayload}
-import com.daml.ledger.api.refinements.ApiTypes.ApplicationId
-import com.daml.jwt.JwtSigner
-import com.daml.jwt.domain.DecodedJwt
-
-import com.daml.lf.engine.script.{Party => ScriptParty, _}
+import scalaz.syntax.traverse._
+import spray.json._
 
 case class Config(
     ledgerPort: Int,
@@ -32,183 +23,10 @@ case class Config(
     // 1.dev DAR
     devDarPath: File,
     wallclockTime: Boolean,
-    auth: Boolean,
     // We use the presence of a root CA as a proxy for whether to enable TLS or not.
     rootCa: Option[File],
 )
 
-case class Test0(dar: Dar[(PackageId, Package)], runner: TestRunner) {
-  val scriptId = Identifier(dar.main._1, QualifiedName.assertFromString("ScriptTest:test0"))
-  def runTests(): Unit = {
-    runner.genericTest(
-      "test0",
-      scriptId,
-      None, {
-        case SRecord(_, _, vals) if vals.size == 5 => {
-          for {
-            alice <- vals.get(0) match {
-              case SParty(alice) => Right(alice)
-              case v => Left(s"Expected party but got $v")
-            }
-            bob <- vals.get(1) match {
-              case SParty(bob) => Right(bob)
-              case v => Left(s"Expected party but got $v")
-            }
-            _ <- TestRunner.assertNotEqual(alice, bob, "Allocate party should return a new party")
-            ts <- vals.get(2) match {
-              case SList(FrontStackCons(t1, FrontStackCons(t2, FrontStack()))) => {
-                Right((t1, t2))
-              }
-              case v => Left(s"Expected list but got $v")
-            }
-            (t1, t2) = ts
-            _ <- t1 match {
-              case SRecord(_, _, vals) if vals.size == 2 =>
-                for {
-                  _ <- TestRunner.assertEqual(vals.get(0), SParty(alice), "Alice")
-                  _ <- TestRunner.assertEqual(vals.get(1), SParty(bob), "Bob")
-                } yield ()
-              case v => Left(s"Expected T but got $v")
-            }
-            _ <- t2 match {
-              case SRecord(_, _, vals) if vals.size == 2 =>
-                for {
-                  _ <- TestRunner.assertEqual(vals.get(0), SParty(alice), "Alice")
-                  _ <- TestRunner.assertEqual(vals.get(1), SParty(bob), "Bob")
-                } yield ()
-              case v => Left(s"Expected T but got $v")
-            }
-            _ <- TestRunner.assertEqual(vals.get(3), SList(FrontStack.empty), "TProposals")
-            c <- vals.get(4) match {
-              case SList(FrontStackCons(c, FrontStack())) => {
-                Right(c)
-              }
-              case v => Left(s"Expected list but got $v")
-            }
-            _ <- c match {
-              case SRecord(_, _, vals) if vals.size == 2 =>
-                for {
-                  _ <- TestRunner.assertEqual(vals.get(0), SParty(alice), "C party")
-                  _ <- TestRunner.assertEqual(vals.get(1), SInt64(42), "C value")
-                } yield ()
-              case v => Left(s"Expected C but got $v")
-            }
-          } yield ()
-        }
-        case v => Left(s"Expected 5-tuple but got $v")
-      }
-    )
-  }
-}
-
-case class Test1(dar: Dar[(PackageId, Package)], runner: TestRunner) {
-  val scriptId = Identifier(dar.main._1, QualifiedName.assertFromString("ScriptTest:test1"))
-  def runTests(): Unit = {
-    runner.genericTest(
-      "test1",
-      scriptId,
-      None, {
-        case SNumeric(n) =>
-          TestRunner.assertEqual(n, Numeric.assertFromString("2.12000000000"), "Numeric")
-        case v => Left(s"Expected SNumeric but got $v")
-      }
-    )
-  }
-}
-
-case class Test2(dar: Dar[(PackageId, Package)], runner: TestRunner) {
-  val scriptId = Identifier(dar.main._1, QualifiedName.assertFromString("ScriptTest:test2"))
-  def runTests(): Unit = {
-    runner.genericTest(
-      "test2",
-      scriptId,
-      Some(JsObject(("p", JsString("Alice")), ("v", JsNumber(42)))), {
-        case SInt64(i) => TestRunner.assertEqual(i, 42, "Numeric")
-        case v => Left(s"Expected SInt but got $v")
-      }
-    )
-  }
-}
-
-case class Test3(dar: Dar[(PackageId, Package)], runner: TestRunner) {
-  val scriptId = Identifier(dar.main._1, QualifiedName.assertFromString("ScriptTest:test3"))
-  def runTests(): Unit = {
-    runner.genericTest(
-      "test3",
-      scriptId,
-      None, {
-        case SUnit => Right(())
-        case v => Left(s"Expected SUnit but got $v")
-      }
-    )
-  }
-}
-
-case class Test4(dar: Dar[(PackageId, Package)], runner: TestRunner) {
-  val scriptId = Identifier(dar.main._1, QualifiedName.assertFromString("ScriptTest:test4"))
-  def runTests(): Unit = {
-    runner.genericTest(
-      "test4",
-      scriptId,
-      None, {
-        case SRecord(_, _, vals) if vals.size == 2 =>
-          TestRunner.assertEqual(vals.get(0), vals.get(1), "ContractIds")
-        case v => Left(s"Expected record with 2 fields but got $v")
-      }
-    )
-  }
-}
-
-case class TestKey(dar: Dar[(PackageId, Package)], runner: TestRunner) {
-  val scriptId = Identifier(dar.main._1, QualifiedName.assertFromString("ScriptTest:testKey"))
-  def runTests(): Unit = {
-    runner.genericTest(
-      "testKey",
-      scriptId,
-      None, {
-        case SRecord(_, _, vals) if vals.size == 2 =>
-          TestRunner.assertEqual(vals.get(0), vals.get(1), "ContractIds")
-        case v => Left(s"Expected record with 2 fields but got $v")
-      }
-    )
-  }
-}
-
-case class TestCreateAndExercise(dar: Dar[(PackageId, Package)], runner: TestRunner) {
-  val scriptId =
-    Identifier(dar.main._1, QualifiedName.assertFromString("ScriptTest:testCreateAndExercise"))
-  def runTests(): Unit = {
-    runner.genericTest(
-      "testKey",
-      scriptId,
-      None,
-      result => TestRunner.assertEqual(SInt64(42), result, "Exercise result")
-    )
-  }
-}
-
-case class GetTime(dar: Dar[(PackageId, Package)], runner: TestRunner) {
-  val scriptId = Identifier(dar.main._1, QualifiedName.assertFromString("ScriptTest:testGetTime"))
-  def runTests() = {
-    runner.genericTest(
-      "getTime",
-      scriptId,
-      None,
-      result =>
-        result match {
-          case SRecord(_, _, vals) if vals.size == 2 =>
-            for {
-              t0 <- TestRunner.assertSTimestamp(vals.get(0))
-              t1 <- TestRunner.assertSTimestamp(vals.get(1))
-              r <- if (!(t0 <= t1))
-                Left(s"Second getTime call $t1 should have happened after first $t0")
-              else Right(())
-            } yield r
-          case v => Left(s"Expected SUnit but got $v")
-      }
-    )
-  }
-}
 
 case class SetTime(dar: Dar[(PackageId, Package)], runner: TestRunner) {
   val scriptId = Identifier(dar.main._1, QualifiedName.assertFromString("ScriptTest:testSetTime"))
@@ -372,20 +190,6 @@ case class TraceOrder(dar: Dar[(PackageId, Package)], runner: TestRunner) {
   }
 }
 
-case class TestAuth(dar: Dar[(PackageId, Package)], runner: TestRunner) {
-  val scriptId = Identifier(dar.main._1, QualifiedName.assertFromString("ScriptTest:auth"))
-  def runTests(): Unit = {
-    runner.genericTest(
-      "auth",
-      scriptId,
-      Some(JsObject(("_1", JsString("Alice")), ("_2", JsString("Bob")))), {
-        case SUnit => Right(())
-        case v => Left(s"Expected SInt but got $v")
-      }
-    )
-  }
-}
-
 case class TestContractId(dar: Dar[(PackageId, Package)], runner: TestRunner) {
   val scriptId =
     Identifier(dar.main._1, QualifiedName.assertFromString("TestContractId:testContractId"))
@@ -462,37 +266,14 @@ object SingleParticipant {
         c.copy(wallclockTime = true)
       }
       .text("Use wall clock time (UTC). When not provided, static time is used.")
-    opt[Unit]("auth")
-      .action { (_, c) =>
-        c.copy(auth = true)
-      }
 
     opt[File]("cacrt")
       .optional()
       .action((d, c) => c.copy(rootCa = Some(d)))
   }
 
-  def getToken(parties: List[String], admin: Boolean): String = {
-    val payload = AuthServiceJWTPayload(
-      ledgerId = None,
-      participantId = None,
-      exp = None,
-      // Set the application id to make sure it is set correctly.
-      applicationId = Some("daml-script-test"),
-      actAs = parties,
-      admin = admin,
-      readAs = List()
-    )
-    val header = """{"alg": "HS256", "typ": "JWT"}"""
-    val jwt = DecodedJwt[String](header, AuthServiceJWTCodec.writeToString(payload))
-    JwtSigner.HMAC256.sign(jwt, "secret") match {
-      case -\/(e) => throw new IllegalStateException(e.toString)
-      case \/-(a) => a.value
-    }
-  }
-
   def main(args: Array[String]): Unit = {
-    configParser.parse(args, Config(0, null, null, false, false, None)) match {
+    configParser.parse(args, Config(0, null, null, false, None)) match {
       case None =>
         sys.exit(1)
       case Some(config) =>
@@ -509,67 +290,37 @@ object SingleParticipant {
           case (pkgId, pkgArchive) => Decode.readArchivePayload(pkgId, pkgArchive)
         }
 
-        val participantParams = if (config.auth) {
-          Participants(
-            None,
-            List(
-              (
-                Participant("alice"),
-                ApiParameters(
-                  "localhost",
-                  config.ledgerPort,
-                  Some(getToken(List("Alice"), false)),
-                  Some(ApplicationId("daml-script-test")))),
-              (
-                Participant("bob"),
-                ApiParameters(
-                  "localhost",
-                  config.ledgerPort,
-                  Some(getToken(List("Bob"), false)),
-                  Some(ApplicationId("daml-script-test"))))
-            ).toMap,
-            List(
-              (ScriptParty("Alice"), Participant("alice")),
-              (ScriptParty("Bob"), Participant("bob"))).toMap
-          )
-        } else {
+        val participantParams =
           Participants(
             Some(ApiParameters("localhost", config.ledgerPort, None, None)),
             Map.empty,
             Map.empty)
-        }
 
         val runner =
           new TestRunner(participantParams, dar, config.wallclockTime, config.rootCa)
         val devRunner =
           new TestRunner(participantParams, devDar, config.wallclockTime, config.rootCa)
-        if (!config.auth) {
-          TestQueryContractId(dar, runner).runTests()
-          TestQueryContractKey(dar, runner).runTests()
-          TraceOrder(dar, runner).runTests()
-          Test0(dar, runner).runTests()
-          Test1(dar, runner).runTests()
-          Test2(dar, runner).runTests()
-          Test3(dar, runner).runTests()
-          Test4(dar, runner).runTests()
-          TestKey(dar, runner).runTests()
-          TestCreateAndExercise(dar, runner).runTests()
-          GetTime(dar, runner).runTests()
-          Sleep(dar, runner).runTests()
-          PartyIdHintTest(dar, runner).runTests()
-          ListKnownParties(dar, runner).runTests()
-          TestStack(dar, runner).runTests()
-          TestMaxInboundMessageSize(dar, runner).runTests()
-          ScriptExample(dar, runner).runTests()
-          TestContractId(devDar, devRunner).runTests()
-          // Keep this at the end since it changes the time and we cannot go backwards.
-          if (!config.wallclockTime) {
-            SetTime(dar, runner).runTests()
-          }
-        } else {
-          // We can’t test much with auth since most of our tests rely on party allocation and being
-          // able to act as the corresponding party.
-          TestAuth(dar, runner).runTests()
+        TestQueryContractId(dar, runner).runTests()
+        TestQueryContractKey(dar, runner).runTests()
+        TraceOrder(dar, runner).runTests()
+        Test0(dar, runner).runTests()
+        Test1(dar, runner).runTests()
+        Test2(dar, runner).runTests()
+        Test3(dar, runner).runTests()
+        Test4(dar, runner).runTests()
+        TestKey(dar, runner).runTests()
+        TestCreateAndExercise(dar, runner).runTests()
+        GetTime(dar, runner).runTests()
+        Sleep(dar, runner).runTests()
+        PartyIdHintTest(dar, runner).runTests()
+        ListKnownParties(dar, runner).runTests()
+        TestStack(dar, runner).runTests()
+        TestMaxInboundMessageSize(dar, runner).runTests()
+        ScriptExample(dar, runner).runTests()
+        TestContractId(devDar, devRunner).runTests()
+        // Keep this at the end since it changes the time and we cannot go backwards.
+        if (!config.wallclockTime) {
+          SetTime(dar, runner).runTests()
         }
     }
   }
